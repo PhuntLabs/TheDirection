@@ -304,184 +304,23 @@ struct GlowingRoute: View {
     }
 }
 
-// MARK: - Main ContentView
+// MARK: - Main ContentView (Tabs - Phase 4)
 struct ContentView: View {
-    // Managers / ViewModels
-    @StateObject private var locationManager = LocationManager()
-    @StateObject private var searchVM = SearchViewModel()
-    @StateObject private var routingVM = RoutingViewModel()
-
-    // Map camera state (iOS 17+) to control camera programmatically
-    @State private var cameraPosition: MapCameraPosition = .automatic
-
-    // Wave animation state
-    @State private var wavePhase: CGFloat = 0
-
-    // Map annotations (nearby + destination)
-    @State private var showUserPulse: Bool = true
+    @StateObject private var settings = AppSettings()
+    @StateObject private var reports = ReportsManager()
 
     var body: some View {
-        ZStack {
-            // Dark gradient background
-            LinearGradient(colors: [Color.black, Color(red: 0.06, green: 0.02, blue: 0.10)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                .ignoresSafeArea()
-
-            // MARK: Map with user location + annotations
-            Map(position: $cameraPosition, interactionModes: [.all]) {
-                // Show user's current location with a custom pulsing dot
-                if let coord = locationManager.currentLocation?.coordinate {
-                    // Invisible annotation anchor, we overlay PulsingDot via MapAnnotation
-                    MapAnnotation(coordinate: coord) {
-                        PulsingDot()
-                    }
-                }
-
-                // Nearby POIs annotations with category-based color and gentle pulse
-                ForEach(searchVM.nearbyMapItems, id: \.
-self) { item in
-                    if let coordinate = item.placemark.location?.coordinate {
-                        MapAnnotation(coordinate: coordinate) {
-                            CategoryMarkerView(category: searchVM.selectedCategory, title: item.name ?? "")
-                                .onTapGesture {
-                                    Task { @MainActor in
-                                        searchVM.selectedDestination = item
-                                        if let user = locationManager.currentLocation?.coordinate {
-                                            await routingVM.calculateRoute(from: user, to: coordinate)
-                                        }
-                                    }
-                                }
-                        }
-                    }
-                }
-
-                // Destination marker (from search)
-                if let destination = searchVM.selectedDestination, let coordinate = destination.placemark.location?.coordinate {
-                    MapAnnotation(coordinate: coordinate) {
-                        DestinationMarkerView(title: destination.name ?? "Destination")
-                    }
-                }
-            }
-            .mapStyle(.standard(elevation: .realistic))
-            .ignoresSafeArea()
-            .onChange(of: locationManager.currentLocation) { _, newLoc in
-                // Center camera on user when location updates the first few times
-                guard let c = newLoc?.coordinate else { return }
-                withAnimation(.easeInOut(duration: 0.8)) {
-                    cameraPosition = .region(MKCoordinateRegion(center: c, latitudinalMeters: 1200, longitudinalMeters: 1200))
-                }
-            }
-
-            // Overlay: Wave demo (Phase 1) near the top as a decorative element
-            VStack(spacing: 0) {
-                SineWave(phase: wavePhase, amplitude: 10, frequency: 2)
-                    .stroke(LinearGradient(colors: [Color.cyan, Color.purple], startPoint: .leading, endPoint: .trailing), lineWidth: 3)
-                    .frame(height: 40)
-                    .blur(radius: 0.5)
-                    .shadow(color: Color.cyan.opacity(0.9), radius: 4)
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .onAppear {
-                        withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
-                            wavePhase = .pi * 2
-                        }
-                    }
-                Spacer()
-            }
-
-            // Overlay: Search bar + results (Phase 2)
-            VStack(spacing: 12) {
-                HStack {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(Color.cyan)
-                        TextField("Search address or place", text: $searchVM.searchText)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                            .onChange(of: searchVM.searchText) { _, text in
-                                searchVM.updateCompletions(for: text)
-                            }
-                        if !searchVM.searchText.isEmpty {
-                            Button(action: { searchVM.searchText = ""; searchVM.completions = [] }) {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(LinearGradient(colors: [Color.purple.opacity(0.8), Color.cyan.opacity(0.8)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-                            .shadow(color: Color.cyan.opacity(0.5), radius: 3)
-                    }
-
-                    Button {
-                        searchVM.isShowingNearbySheet = true
-                    } label: {
-                        Image(systemName: "location.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .font(.title3)
-                            .foregroundStyle(Color.purple)
-                            .shadow(color: Color.purple.opacity(0.8), radius: 6)
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.top, 8)
-
-                // Autocomplete results with subtle wave slide-in
-                if !searchVM.completions.isEmpty {
-                    AutocompleteList(completions: searchVM.completions) { completion in
-                        Task { @MainActor in
-                            if let item = await searchVM.performAutocompleteSelection(completion) {
-                                if let coord = item.placemark.location?.coordinate {
-                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) {
-                                        cameraPosition = .region(MKCoordinateRegion(center: coord, latitudinalMeters: 1500, longitudinalMeters: 1500))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-
-                Spacer()
-            }
-
-            // Overlay: Animated route if available (Phase 3)
-            if let polyline = routingVM.route?.polyline {
-                GlowingRoute(coordinates: polyline.toCoordinates())
-                    .allowsHitTesting(false)
-                    .padding(16)
-            }
-
-            // Bottom sheet for turn-by-turn (Phase 3)
-            if routingVM.isShowingDirectionsSheet {
-                DirectionsSheet(steps: routingVM.steps) {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) {
-                        routingVM.isShowingDirectionsSheet = false
-                    }
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .ignoresSafeArea(edges: .bottom)
-            }
+        TabView {
+            MapScreen()
+                .tabItem { Label(settings.localized(.mapTab), systemImage: "map") }
+            ReportsView()
+                .tabItem { Label(settings.localized(.reportsTab), systemImage: "exclamationmark.triangle") }
+            SettingsView()
+                .tabItem { Label(settings.localized(.settingsTab), systemImage: "gear") }
         }
-        .preferredColorScheme(.dark) // Force dark theme
-        .task(id: searchVM.selectedDestination) {
-            // When destination changes, request a route
-            guard let dest = searchVM.selectedDestination?.placemark.location?.coordinate,
-                  let user = locationManager.currentLocation?.coordinate else { return }
-            await routingVM.calculateRoute(from: user, to: dest)
-        }
-        .sheet(isPresented: $searchVM.isShowingNearbySheet) {
-            NearbySheetView(selected: searchVM.selectedCategory) { category in
-                if let user = locationManager.currentLocation?.coordinate {
-                    Task { await searchVM.fetchNearby(for: category, around: user) }
-                }
-            }
-            .presentationDetents([.medium, .large])
-            .presentationBackground(.ultraThinMaterial)
-        }
+        .preferredColorScheme(settings.isDarkMode ? .dark : .light)
+        .environmentObject(settings)
+        .environmentObject(reports)
     }
 }
 
@@ -701,19 +540,8 @@ extension MKPolyline {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
-            .previewDisplayName("Map + Wave + Search + Directions")
+            .previewDisplayName("Tabs + Map + Reports + Settings")
     }
 }
 
-import SwiftUI
-
-struct ContentView: View {
-    var body: some View {
-        Text("Hello, world!")
-            .padding()
-    }
-}
-
-#Preview {
-    ContentView()
-}
+// Duplicate ContentView removed
