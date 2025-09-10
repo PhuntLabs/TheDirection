@@ -14,6 +14,7 @@ struct MapScreen: View {
     @State private var showingReportSheet: Bool = false
     @State private var newReportType: ReportType = .police
     @State private var selectedReport: TrafficReport? = nil
+    @State private var etaTimer: Timer? = nil
 
     var body: some View {
         ZStack {
@@ -67,6 +68,18 @@ self) { item in
                 guard let c = newLoc?.coordinate else { return }
                 withAnimation(.easeInOut(duration: 0.8)) {
                     cameraPosition = .region(MKCoordinateRegion(center: c, latitudinalMeters: 1200, longitudinalMeters: 1200))
+                }
+            }
+            .onChange(of: searchVM.selectedDestination) { _, dest in
+                // Start/stop ETA timer based on whether a destination is active
+                etaTimer?.invalidate()
+                guard dest != nil else { return }
+                etaTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
+                    Task { @MainActor in
+                        guard let destCoord = searchVM.selectedDestination?.placemark.location?.coordinate,
+                              let user = locationManager.currentLocation?.coordinate else { return }
+                        await routingVM.calculateConsideringReports(from: user, to: destCoord, avoid: visibleReports())
+                    }
                 }
             }
 
@@ -213,6 +226,17 @@ self) { item in
         .task(id: searchVM.selectedDestination) {
             guard let dest = searchVM.selectedDestination?.placemark.location?.coordinate, let user = locationManager.currentLocation?.coordinate else { return }
             await routingVM.calculateConsideringReports(from: user, to: dest, avoid: visibleReports())
+        }
+        .onChange(of: reports.reports) { _, _ in
+            // Recompute if there is an active destination when reports change (dynamic ETA & detours)
+            Task { @MainActor in
+                guard let dest = searchVM.selectedDestination?.placemark.location?.coordinate,
+                      let user = locationManager.currentLocation?.coordinate else { return }
+                await routingVM.calculateConsideringReports(from: user, to: dest, avoid: visibleReports())
+            }
+        }
+        .onDisappear {
+            etaTimer?.invalidate(); etaTimer = nil
         }
     }
 
